@@ -1,2 +1,1 @@
-# wengine
-Graphics Engine based on WebGPU
+# Wengine : Graphics Engine based on WebGPU
