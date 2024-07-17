@@ -3,9 +3,8 @@ package wengine
 import "base:runtime"
 
 import "core:bytes"
-import "core:c/libc"
-import "core:fmt"
 import "core:image/png"
+import "core:log"
 import "core:math/linalg"
 import "core:os"
 
@@ -234,8 +233,6 @@ texture_create :: proc(device: wgpu.Device) -> Texture {
 	diffuse_image, err := png.load_from_bytes(diffuse_bytes)
 	diffuse_rgba := bytes.buffer_to_bytes(&diffuse_image.pixels)
 
-	fmt.println(diffuse_image)
-
 	texture_size := wgpu.Extent3D {
 		width              = cast(u32)diffuse_image.width,
 		height             = cast(u32)diffuse_image.height,
@@ -349,8 +346,8 @@ texture_create :: proc(device: wgpu.Device) -> Texture {
 }
 
 main :: proc() {
+	context.logger = log.create_console_logger()
 	state.ctx = context
-
 	os_init(&state.os)
 
 	state.instance = wgpu.CreateInstance(nil)
@@ -374,7 +371,7 @@ main :: proc() {
 	) {
 		context = state.ctx
 		if status != .Success || adapter == nil {
-			fmt.panicf("request adapter failure: [%v] %s", status, message)
+			log.panicf("request adapter failure: [%v] %s", status, message)
 		}
 		state.adapter = adapter
 		wgpu.AdapterRequestDevice(adapter, nil, on_device)
@@ -388,7 +385,7 @@ main :: proc() {
 	) {
 		context = state.ctx
 		if status != .Success || device == nil {
-			fmt.panicf("request device failure: [%v] %s", status, message)
+			log.panicf("request device failure: [%v] %s", status, message)
 		}
 		state.device = device
 
@@ -544,7 +541,7 @@ process_key_event :: proc "c" (key_event: KeyEvent) {
 		os.exit(0)
 	}
 
-	fmt.println(key_event)
+	log.info(key_event)
 }
 
 frame :: proc "c" (dt: f32) {
@@ -563,7 +560,7 @@ frame :: proc "c" (dt: f32) {
 		return
 	case .OutOfMemory, .DeviceLost:
 		// Fatal error
-		fmt.panicf("[triangle] get_current_texture status=%v", surface_texture.status)
+		log.panicf("[triangle] get_current_texture status=%v", surface_texture.status)
 	}
 	defer wgpu.TextureRelease(surface_texture.texture)
 
