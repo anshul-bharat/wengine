@@ -23,11 +23,8 @@ State :: struct {
 	pipeline_layout: wgpu.PipelineLayout,
 	pipeline:        wgpu.RenderPipeline,
 	camera:          Camera,
-}
-
-Texture :: struct {
-	bind_group_layout: wgpu.BindGroupLayout,
-	bind_group:        wgpu.BindGroup,
+	instances:       [dynamic]Instance,
+	instance_buffer: wgpu.Buffer,
 }
 
 Mesh :: struct {
@@ -57,27 +54,30 @@ ColorAngle :: struct {
 	angle: f32,
 }
 
-Camera :: struct {
-	eye:    [3]f32,
-	target: [3]f32,
-	up:     [3]f32,
-	aspect: f32,
-	fovy:   f32,
-	znear:  f32,
-	zfar:   f32,
+Instance :: struct {
+	position: [3]f32,
+	rotation: linalg.Quaternionf32,
 }
 
-MESHES: [dynamic]Mesh
-TEXTURES: [dynamic]Texture
-SHADER_BIND_GROUPS: [dynamic]ShaderBindGroup
+InstanceRaw :: struct {
+	model: matrix[4, 4]f32,
+}
 
 uniforms := ColorAngle {
 	color = 0.7,
 	angle = 0.01,
 }
 
+camera_controller := CameraController {
+	speed = 0.2,
+}
+
 @(private = "file")
 state: State
+
+MESHES: [dynamic]Mesh
+TEXTURES: [dynamic]Texture
+SHADER_BIND_GROUPS: [dynamic]ShaderBindGroup
 
 VERTICES :: []Vertex {
 	Vertex {
@@ -116,17 +116,18 @@ OPENGL_TO_WGPU_MATRIX :: matrix[4, 4]f32{
 	0.0, 0.0, 0.0, 1.0, 
 }
 
-camera_build_view_projection_matrix :: proc(camera: ^Camera) -> matrix[4, 4]f32 {
-	view := linalg.matrix4_look_at(camera.eye, camera.target, camera.up)
+NUM_INSTANCES_PER_ROW := 2
+INSTANCE_DISPLACEMENT := [3]f32 {
+	cast(f32)NUM_INSTANCES_PER_ROW * 0.5,
+	0.0,
+	cast(f32)NUM_INSTANCES_PER_ROW * 0.5,
+}
 
-	proj := linalg.matrix4_perspective(
-		linalg.to_degrees(camera.fovy),
-		camera.aspect,
-		camera.znear,
-		camera.zfar,
-	)
-
-	return OPENGL_TO_WGPU_MATRIX * proj * view
+instance_to_raw :: proc(instance: ^Instance) -> InstanceRaw {
+	return InstanceRaw {
+		model = linalg.matrix4_translate(instance.position) *
+		linalg.matrix4_from_quaternion(instance.rotation),
+	}
 }
 
 vertices_get_translated :: proc(vertices: []Vertex, point: [3]f32) -> []Vertex {
@@ -227,124 +228,6 @@ shader_bind_group_create :: proc(device: wgpu.Device, data: []$T) -> ShaderBindG
 	return shader
 }
 
-texture_create :: proc(device: wgpu.Device) -> Texture {
-
-	diffuse_bytes := #load("assets/happy-tree.png")
-	diffuse_image, err := png.load_from_bytes(diffuse_bytes)
-	diffuse_rgba := bytes.buffer_to_bytes(&diffuse_image.pixels)
-
-	texture_size := wgpu.Extent3D {
-		width              = cast(u32)diffuse_image.width,
-		height             = cast(u32)diffuse_image.height,
-		depthOrArrayLayers = 1,
-	}
-
-	diffuse_texture := wgpu.DeviceCreateTexture(
-		device,
-		&wgpu.TextureDescriptor {
-			label         = "diffuse_texture",
-			size          = texture_size,
-			mipLevelCount = 1,
-			sampleCount   = 1,
-			dimension     = wgpu.TextureDimension._2D,
-			format        = wgpu.TextureFormat.RGBA8UnormSrgb,
-			usage         = {.TextureBinding, .CopyDst},
-			// view_formats = 
-		},
-	)
-
-	wgpu.QueueWriteTexture(
-		state.queue,
-		&wgpu.ImageCopyTexture {
-			texture = diffuse_texture,
-			mipLevel = 0,
-			origin = wgpu.Origin3D{0, 0, 0},
-			aspect = wgpu.TextureAspect.All,
-		},
-		raw_data(diffuse_rgba),
-		size_of(u8) * len(diffuse_rgba),
-		&wgpu.TextureDataLayout {
-			offset = 0,
-			bytesPerRow = 4 * cast(u32)diffuse_image.width,
-			rowsPerImage = cast(u32)diffuse_image.height,
-		},
-		&texture_size,
-	)
-
-	diffuse_texture_view := wgpu.TextureCreateView(diffuse_texture)
-	diffuse_sampler := wgpu.DeviceCreateSampler(
-		state.device,
-		&wgpu.SamplerDescriptor {
-			addressModeU = wgpu.AddressMode.ClampToEdge,
-			addressModeV = wgpu.AddressMode.ClampToEdge,
-			addressModeW = wgpu.AddressMode.ClampToEdge,
-			magFilter = wgpu.FilterMode.Linear,
-			minFilter = wgpu.FilterMode.Nearest,
-			mipmapFilter = wgpu.MipmapFilterMode.Nearest,
-			lodMinClamp = 0,
-			lodMaxClamp = 32,
-			maxAnisotropy = 1,
-		},
-	)
-
-	texture_bind_group_layout := wgpu.DeviceCreateBindGroupLayout(
-		state.device,
-		&wgpu.BindGroupLayoutDescriptor {
-			label      = "texture_bind_group_layout",
-			entryCount = 2,
-			entries    = raw_data(
-				[]wgpu.BindGroupLayoutEntry {
-					wgpu.BindGroupLayoutEntry {
-						binding = 0,
-						visibility = {.Fragment},
-						// buffer = BufferBindingLayout,
-						// sampler = SamplerBindingLayout,
-						texture = wgpu.TextureBindingLayout {
-							sampleType = wgpu.TextureSampleType.Float,
-							viewDimension = wgpu.TextureViewDimension._2D,
-							multisampled = false,
-						},
-					},
-					wgpu.BindGroupLayoutEntry {
-						binding = 1,
-						visibility = {.Fragment},
-						sampler = wgpu.SamplerBindingLayout {
-							type = wgpu.SamplerBindingType.Filtering,
-						},
-					},
-				},
-			),
-		},
-	)
-
-	diffuse_bind_group := wgpu.DeviceCreateBindGroup(
-		state.device,
-		&wgpu.BindGroupDescriptor {
-			label = "diffuse_bind_group",
-			layout = texture_bind_group_layout,
-			entryCount = 2,
-			entries = raw_data(
-				[]wgpu.BindGroupEntry {
-					wgpu.BindGroupEntry {
-						binding = 0,
-						offset = 0,
-						size = 0,
-						textureView = diffuse_texture_view,
-					},
-					wgpu.BindGroupEntry {
-						binding = 1,
-						offset = 0,
-						size = 0,
-						sampler = diffuse_sampler,
-					},
-				},
-			),
-		},
-	)
-
-	return Texture{bind_group_layout = texture_bind_group_layout, bind_group = diffuse_bind_group}
-}
-
 main :: proc() {
 	context.logger = log.create_console_logger()
 	state.ctx = context
@@ -429,16 +312,51 @@ main :: proc() {
 		}
 		//camera end
 
+		instance_data := [dynamic]InstanceRaw{}
+		for z in 0 ..< NUM_INSTANCES_PER_ROW {
+			for x in 0 ..< NUM_INSTANCES_PER_ROW {
+				position := [3]f32 {
+					cast(f32)x - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
+					0.0,
+					cast(f32)z - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
+				} // - INSTANCE_DISPLACEMENT
+				rotation: linalg.Quaternionf32
+				// if true {
+				// 	log.info("Exitting", cast(f32)x, cast(f32)z)
+				// 	os.exit(0)
+				// }
+				if cast(i32)linalg.length(position) == 0 {
+					rotation = linalg.quaternion_angle_axis_f32(0.0, [3]f32{0.0, 0.0, 1.0})
+				} else {
+					rotation = linalg.quaternion_angle_axis_f32(
+						cast(f32)linalg.to_radians(45.0),
+						linalg.normalize(position),
+					)
+				}
+				instance := Instance {
+					position = position,
+					rotation = rotation,
+				}
+				append(&instance_data, instance_to_raw(&instance))
+				append(&state.instances, instance)
+			}
+		}
+		state.instance_buffer = wgpu.DeviceCreateBufferWithDataSlice(
+			device,
+			&wgpu.BufferWithDataDescriptor{label = "Instance buffer", usage = {.Vertex}},
+			instance_data[:],
+		)
+
 		shader_bind_group_1 := shader_bind_group_create(device, []ColorAngle{uniforms})
 		shader_bind_group_2 := shader_bind_group_create(
 			device,
-			[]matrix[4, 4]f32{camera_build_view_projection_matrix(&state.camera)},
+			[]CameraUniform{camera_build_view_projection_matrix(&state.camera)},
 		)
 		append(&SHADER_BIND_GROUPS, shader_bind_group_1)
 		append(&SHADER_BIND_GROUPS, shader_bind_group_2)
 
 
-		texture_1 := texture_create(device)
+		texture_1 := texture_create(&state)
 		append(&TEXTURES, texture_1)
 
 		meshes_1 := mesh_create(
@@ -446,13 +364,13 @@ main :: proc() {
 			vertices_get_translated(VERTICES, [?]f32{0.5, 0.0, 0.0}),
 			INDICES,
 		)
-		meshes_2 := mesh_create(
-			device,
-			vertices_get_translated(VERTICES, [?]f32{-0.5, 0.0, 0.0}),
-			INDICES,
-		)
+		// meshes_2 := mesh_create(
+		// 	device,
+		// 	vertices_get_translated(VERTICES, [?]f32{-0.5, 0.0, 0.0}),
+		// 	INDICES,
+		// )
 		append(&MESHES, meshes_1)
-		append(&MESHES, meshes_2)
+		// append(&MESHES, meshes_2)
 
 		bind_group_layouts := [dynamic]wgpu.BindGroupLayout{}
 		for l in SHADER_BIND_GROUPS {
@@ -489,6 +407,29 @@ main :: proc() {
 			},
 		}
 
+		iattrs := []wgpu.VertexAttribute {
+			wgpu.VertexAttribute {
+				offset = 0,
+				shaderLocation = 5,
+				format = wgpu.VertexFormat.Float32x4,
+			},
+			wgpu.VertexAttribute {
+				offset = 4 * size_of(f32),
+				shaderLocation = 6,
+				format = wgpu.VertexFormat.Float32x4,
+			},
+			wgpu.VertexAttribute {
+				offset = 8 * size_of(f32),
+				shaderLocation = 7,
+				format = wgpu.VertexFormat.Float32x4,
+			},
+			wgpu.VertexAttribute {
+				offset = 12 * size_of(f32),
+				shaderLocation = 8,
+				format = wgpu.VertexFormat.Float32x4,
+			},
+		}
+
 		state.pipeline = wgpu.DeviceCreateRenderPipeline(
 			state.device,
 			&wgpu.RenderPipelineDescriptor {
@@ -496,13 +437,23 @@ main :: proc() {
 				vertex = wgpu.VertexState {
 					module = state.module,
 					entryPoint = "vs_main",
-					buffers = &wgpu.VertexBufferLayout {
-						arrayStride = 8 * size_of(f32),
-						stepMode = wgpu.VertexStepMode.Vertex,
-						attributes = raw_data(attrs),
-						attributeCount = len(attrs),
-					},
-					bufferCount = 1,
+					buffers = raw_data(
+						[]wgpu.VertexBufferLayout {
+							{
+								arrayStride = size_of(Vertex),
+								stepMode = wgpu.VertexStepMode.Vertex,
+								attributes = raw_data(attrs),
+								attributeCount = len(attrs),
+							},
+							{
+								arrayStride = size_of(InstanceRaw),
+								stepMode = wgpu.VertexStepMode.Instance,
+								attributes = raw_data(iattrs),
+								attributeCount = len(iattrs),
+							},
+						},
+					),
+					bufferCount = 2,
 				},
 				fragment = &{
 					module = state.module,
@@ -530,18 +481,23 @@ resize :: proc "c" () {
 }
 
 process_key_event :: proc "c" (key_event: KeyEvent) {
-	context = runtime.default_context()
+	context = state.ctx
 
 	#partial switch key_event.key_code {
-	case KeyCode.ARROW_LEFT:
-		state.camera.eye.x += 1
-	case KeyCode.ARROW_RIGHT:
-		state.camera.eye.x -= 1
+	// case KeyCode.ARROW_LEFT:
+	// 	state.camera.eye.x += 1
+	// case KeyCode.ARROW_RIGHT:
+	// 	state.camera.eye.x -= 1
 	case KeyCode.ESCAPE:
 		os.exit(0)
 	}
 
-	log.info(key_event)
+	camera_controller_process_events(&camera_controller, key_event)
+	camera_controller_update_camera(&camera_controller, &state.camera)
+
+	// log.info(state.camera.eye)
+	// log.info(key_event)
+	// log.info(camera_controller)
 }
 
 frame :: proc "c" (dt: f32) {
@@ -609,8 +565,8 @@ frame :: proc "c" (dt: f32) {
 				state.queue,
 				shader_bind_group.buffer,
 				0,
-				raw_data([]matrix[4, 4]f32{camera_build_view_projection_matrix(&state.camera)}),
-				size_of(ColorAngle),
+				raw_data([]CameraUniform{camera_build_view_projection_matrix(&state.camera)}),
+				size_of(CameraUniform),
 			)
 		}
 		wgpu.RenderPassEncoderSetBindGroup(
@@ -632,6 +588,14 @@ frame :: proc "c" (dt: f32) {
 			wgpu.BufferGetSize(mesh.vertex_buffer),
 		)
 
+		wgpu.RenderPassEncoderSetVertexBuffer(
+			render_pass_encoder,
+			1,
+			state.instance_buffer,
+			0,
+			wgpu.BufferGetSize(state.instance_buffer),
+		)
+
 		wgpu.RenderPassEncoderSetIndexBuffer(
 			render_pass_encoder,
 			mesh.index_buffer,
@@ -640,10 +604,11 @@ frame :: proc "c" (dt: f32) {
 			wgpu.BufferGetSize(mesh.index_buffer),
 		)
 
+
 		wgpu.RenderPassEncoderDrawIndexed(
 			render_pass_encoder,
 			cast(u32)len(mesh.indices),
-			1,
+			cast(u32)len(state.instances),
 			0,
 			0,
 			0,
