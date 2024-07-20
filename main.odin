@@ -6,7 +6,6 @@ import "core:bytes"
 import "core:image/png"
 import "core:log"
 import "core:math/linalg"
-import "core:os"
 
 import "vendor:wgpu"
 
@@ -25,13 +24,17 @@ State :: struct {
 	camera:          Camera,
 	instances:       [dynamic]Instance,
 	instance_buffer: wgpu.Buffer,
+	depth_texture:   DepthTexture,
 }
 
 Mesh :: struct {
-	vertices:      []Vertex,
-	indices:       []u16,
-	vertex_buffer: wgpu.Buffer,
-	index_buffer:  wgpu.Buffer,
+	vertices:        []Vertex,
+	indices:         []u16,
+	vertex_buffer:   wgpu.Buffer,
+	index_buffer:    wgpu.Buffer,
+	instance_buffer: wgpu.Buffer,
+	instance_count:  i32,
+	instance_data:   []InstanceRaw,
 }
 
 ShaderBindGroup :: struct {
@@ -41,6 +44,9 @@ ShaderBindGroup :: struct {
 	bind_group:        wgpu.BindGroup,
 	// buffers:           []wgpu.Buffer,
 	buffer:            wgpu.Buffer,
+	type_size:         uint,
+	data_type:         typeid,
+	data:              rawptr,
 }
 
 Vertex :: struct {
@@ -76,7 +82,7 @@ camera_controller := CameraController {
 state: State
 
 MESHES: [dynamic]Mesh
-TEXTURES: [dynamic]Texture
+TEXTURES: [dynamic]DiffuseTexture
 SHADER_BIND_GROUPS: [dynamic]ShaderBindGroup
 
 VERTICES :: []Vertex {
@@ -116,7 +122,7 @@ OPENGL_TO_WGPU_MATRIX :: matrix[4, 4]f32{
 	0.0, 0.0, 0.0, 1.0, 
 }
 
-NUM_INSTANCES_PER_ROW := 2
+NUM_INSTANCES_PER_ROW := 10
 INSTANCE_DISPLACEMENT := [3]f32 {
 	cast(f32)NUM_INSTANCES_PER_ROW * 0.5,
 	0.0,
@@ -130,6 +136,12 @@ instance_to_raw :: proc(instance: ^Instance) -> InstanceRaw {
 	}
 }
 
+shader_bind_group_update :: proc(shader_bind_group: ^ShaderBindGroup) {
+	data := camera_build_view_projection_matrix(&state.camera)
+
+	shader_bind_group.data = raw_data([]CameraUniform{data})
+}
+
 vertices_get_translated :: proc(vertices: []Vertex, point: [3]f32) -> []Vertex {
 	translated := vertices
 
@@ -140,7 +152,12 @@ vertices_get_translated :: proc(vertices: []Vertex, point: [3]f32) -> []Vertex {
 	return translated
 }
 
-mesh_create :: proc(device: wgpu.Device, vertices: []Vertex, indices: []u16) -> Mesh {
+mesh_create :: proc(
+	device: wgpu.Device,
+	vertices: []Vertex,
+	indices: []u16,
+	instance_data: []$T = nil,
+) -> Mesh {
 	mesh: Mesh
 	mesh.vertices = vertices
 	mesh.indices = indices
@@ -157,6 +174,16 @@ mesh_create :: proc(device: wgpu.Device, vertices: []Vertex, indices: []u16) -> 
 		indices,
 	)
 
+	if instance_data != nil {
+		mesh.instance_buffer = wgpu.DeviceCreateBufferWithDataSlice(
+			device,
+			&wgpu.BufferWithDataDescriptor{label = "Instance buffer", usage = {.Vertex}},
+			instance_data,
+		)
+		mesh.instance_count = cast(i32)len(instance_data)
+		mesh.instance_data = instance_data
+	}
+
 	return mesh
 }
 
@@ -170,10 +197,18 @@ shader_bind_group_create :: proc(device: wgpu.Device, data: []$T) -> ShaderBindG
 		data,
 	)
 
-	bind_group_layout_entries := [dynamic]wgpu.BindGroupLayoutEntry{}
+	// bind_group_layout_entries := [dynamic]wgpu.BindGroupLayoutEntry{}
+	// bind_group_entries := [dynamic]wgpu.BindGroupEntry{}
+	// defer {
+	// 	clear(&bind_group_layout_entries)
+	// 	clear(&bind_group_entries)
+	// 	free(&bind_group_layout_entries)
+	// 	free(&bind_group_entries)
+	// }
 
-	bind_group_entries := [dynamic]wgpu.BindGroupEntry{}
-
+	bind_group_layout_entry: wgpu.BindGroupLayoutEntry
+	bind_group_entry: wgpu.BindGroupEntry
+	assert(count == 1, "bind group data count should be 1")
 	for i in 0 ..< count {
 		layout_entry := wgpu.BindGroupLayoutEntry {
 			binding = cast(u32)i,
@@ -200,37 +235,53 @@ shader_bind_group_create :: proc(device: wgpu.Device, data: []$T) -> ShaderBindG
 			textureView = nil,
 		}
 
-		append(&bind_group_layout_entries, layout_entry)
-		append(&bind_group_entries, group_entry)
+		bind_group_entry = group_entry
+		bind_group_layout_entry = layout_entry
+
+		// append(&bind_group_layout_entries, layout_entry)
+		// append(&bind_group_entries, group_entry)
 	}
 
 	bind_group_layout := wgpu.DeviceCreateBindGroupLayout(
 		device,
 		&wgpu.BindGroupLayoutDescriptor {
-			label = "camera bind group layout",
+			label      = "camera bind group layout",
 			entryCount = count,
-			entries = raw_data(bind_group_layout_entries),
+			// entries = raw_data(bind_group_layout_entries),
+			entries    = &bind_group_layout_entry,
 		},
 	)
 
 	bind_group := wgpu.DeviceCreateBindGroup(
 		device,
 		&wgpu.BindGroupDescriptor {
-			layout = bind_group_layout,
+			layout     = bind_group_layout,
 			entryCount = count,
-			entries = raw_data(bind_group_entries),
+			// entries = raw_data(bind_group_entries),
+			entries    = &bind_group_entry,
 		},
 	)
+
 
 	shader.bind_group_layout = bind_group_layout
 	shader.bind_group = bind_group
 	shader.buffer = buffer
+	shader.type_size = size_of(T)
+	shader.data_type = T
+
+	// shader.data = data
 	return shader
 }
 
-main :: proc() {
+// shader_bind_group_free :: proc(sbgl: ShaderBindGroup) {
+
+// }
+
+_main :: proc() {
+
 	context.logger = log.create_console_logger()
 	state.ctx = context
+
 	os_init(&state.os)
 
 	state.instance = wgpu.CreateInstance(nil)
@@ -341,11 +392,8 @@ main :: proc() {
 				append(&state.instances, instance)
 			}
 		}
-		state.instance_buffer = wgpu.DeviceCreateBufferWithDataSlice(
-			device,
-			&wgpu.BufferWithDataDescriptor{label = "Instance buffer", usage = {.Vertex}},
-			instance_data[:],
-		)
+
+		// delete(instance_data)
 
 		shader_bind_group_1 := shader_bind_group_create(device, []ColorAngle{uniforms})
 		shader_bind_group_2 := shader_bind_group_create(
@@ -363,16 +411,19 @@ main :: proc() {
 			device,
 			vertices_get_translated(VERTICES, [?]f32{0.5, 0.0, 0.0}),
 			INDICES,
+			instance_data[:],
 		)
 		// meshes_2 := mesh_create(
 		// 	device,
 		// 	vertices_get_translated(VERTICES, [?]f32{-0.5, 0.0, 0.0}),
 		// 	INDICES,
+		// 	instance_data[:],
 		// )
 		append(&MESHES, meshes_1)
 		// append(&MESHES, meshes_2)
 
 		bind_group_layouts := [dynamic]wgpu.BindGroupLayout{}
+		// defer delete(bind_group_layouts)
 		for l in SHADER_BIND_GROUPS {
 			append(&bind_group_layouts, l.bind_group_layout)
 		}
@@ -388,6 +439,9 @@ main :: proc() {
 				bindGroupLayouts = raw_data(bind_group_layouts),
 			},
 		)
+
+		delete(bind_group_layouts)
+		// clear(&bind_group_layouts)
 
 		attrs := []wgpu.VertexAttribute {
 			wgpu.VertexAttribute {
@@ -430,6 +484,8 @@ main :: proc() {
 			},
 		}
 
+		state.depth_texture = texture_create_depth(&state.device, &state.config, "depth_texture")
+
 		state.pipeline = wgpu.DeviceCreateRenderPipeline(
 			state.device,
 			&wgpu.RenderPipelineDescriptor {
@@ -466,6 +522,28 @@ main :: proc() {
 				},
 				primitive = {topology = .TriangleList},
 				multisample = {count = 1, mask = 0xFFFFFFFF},
+				depthStencil = &wgpu.DepthStencilState {
+					format = DEPTH_FORMAT,
+					depthWriteEnabled = true,
+					depthCompare = wgpu.CompareFunction.Less,
+					stencilFront = wgpu.StencilFaceState {
+						compare = wgpu.CompareFunction.Always,
+						failOp = wgpu.StencilOperation.Keep,
+						depthFailOp = wgpu.StencilOperation.Keep,
+						passOp = wgpu.StencilOperation.Keep,
+					},
+					stencilBack = wgpu.StencilFaceState {
+						compare = wgpu.CompareFunction.Always,
+						failOp = wgpu.StencilOperation.Keep,
+						depthFailOp = wgpu.StencilOperation.Keep,
+						passOp = wgpu.StencilOperation.Keep,
+					},
+					stencilReadMask = 0,
+					stencilWriteMask = 0,
+					depthBias = 0,
+					depthBiasSlopeScale = 0,
+					depthBiasClamp = 0,
+				},
 			},
 		)
 
@@ -478,6 +556,8 @@ resize :: proc "c" () {
 
 	state.config.width, state.config.height = os_get_render_bounds(&state.os)
 	wgpu.SurfaceConfigure(state.surface, &state.config)
+
+	state.depth_texture = texture_create_depth(&state.device, &state.config, "depth_texture")
 }
 
 process_key_event :: proc "c" (key_event: KeyEvent) {
@@ -489,12 +569,12 @@ process_key_event :: proc "c" (key_event: KeyEvent) {
 	// case KeyCode.ARROW_RIGHT:
 	// 	state.camera.eye.x -= 1
 	case KeyCode.ESCAPE:
-		os.exit(0)
+		exit(0)
 	}
 
 	camera_controller_process_events(&camera_controller, key_event)
 	camera_controller_update_camera(&camera_controller, &state.camera)
-
+	// camera_uniform^ = camera_build_view_projection_matrix(&state.camera)
 	// log.info(state.camera.eye)
 	// log.info(key_event)
 	// log.info(camera_controller)
@@ -528,13 +608,19 @@ frame :: proc "c" (dt: f32) {
 
 	render_pass_encoder := wgpu.CommandEncoderBeginRenderPass(
 		command_encoder,
-		&{
+		&wgpu.RenderPassDescriptor {
 			colorAttachmentCount = 1,
 			colorAttachments = &wgpu.RenderPassColorAttachment {
 				view = frame,
 				loadOp = .Clear,
 				storeOp = .Store,
 				clearValue = {r = 0, g = 0, b = 0, a = 1},
+			},
+			depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment {
+				view = state.depth_texture.view,
+				depthLoadOp = wgpu.LoadOp.Clear,
+				depthClearValue = 1.0,
+				depthStoreOp = wgpu.StoreOp.Store,
 			},
 		},
 	)
@@ -551,22 +637,30 @@ frame :: proc "c" (dt: f32) {
 		)
 	}
 
+	SHADER_BIND_GROUPS[0].data = raw_data([]ColorAngle{uniforms})
+	SHADER_BIND_GROUPS[1].data = raw_data(
+		[]CameraUniform{camera_build_view_projection_matrix(&state.camera)},
+	)
+
 	for shader_bind_group, i in SHADER_BIND_GROUPS {
 		if i == 0 {
 			wgpu.QueueWriteBuffer(
 				state.queue,
 				shader_bind_group.buffer,
 				0,
-				raw_data([]ColorAngle{uniforms}),
-				size_of(ColorAngle),
+				shader_bind_group.data,
+				shader_bind_group.type_size,
 			)
 		} else if i == 1 {
+
+			// camera_u := camera_build_view_projection_matrix(&state.camera)
 			wgpu.QueueWriteBuffer(
 				state.queue,
 				shader_bind_group.buffer,
 				0,
-				raw_data([]CameraUniform{camera_build_view_projection_matrix(&state.camera)}),
-				size_of(CameraUniform),
+				shader_bind_group.data,
+				// raw_data([]CameraUniform{camera_u}),
+				shader_bind_group.type_size,
 			)
 		}
 		wgpu.RenderPassEncoderSetBindGroup(
@@ -578,6 +672,7 @@ frame :: proc "c" (dt: f32) {
 
 	uniforms.color += 0.1
 	uniforms.angle += 0.01
+
 
 	for mesh in MESHES {
 		wgpu.RenderPassEncoderSetVertexBuffer(
@@ -591,9 +686,9 @@ frame :: proc "c" (dt: f32) {
 		wgpu.RenderPassEncoderSetVertexBuffer(
 			render_pass_encoder,
 			1,
-			state.instance_buffer,
+			mesh.instance_buffer,
 			0,
-			wgpu.BufferGetSize(state.instance_buffer),
+			wgpu.BufferGetSize(mesh.instance_buffer),
 		)
 
 		wgpu.RenderPassEncoderSetIndexBuffer(
@@ -608,7 +703,8 @@ frame :: proc "c" (dt: f32) {
 		wgpu.RenderPassEncoderDrawIndexed(
 			render_pass_encoder,
 			cast(u32)len(mesh.indices),
-			cast(u32)len(state.instances),
+			// cast(u32)len(state.instances),
+			cast(u32)mesh.instance_count,
 			0,
 			0,
 			0,
@@ -624,6 +720,8 @@ frame :: proc "c" (dt: f32) {
 }
 
 finish :: proc() {
+	context = state.ctx
+	log.info("Cleaning up")
 	wgpu.RenderPipelineRelease(state.pipeline)
 	wgpu.PipelineLayoutRelease(state.pipeline_layout)
 	wgpu.ShaderModuleRelease(state.module)
@@ -632,5 +730,16 @@ finish :: proc() {
 	wgpu.AdapterRelease(state.adapter)
 	wgpu.SurfaceRelease(state.surface)
 	wgpu.InstanceRelease(state.instance)
+
+	delete(state.instances)
+
+	delete(SHADER_BIND_GROUPS)
+	delete(TEXTURES)
+
+	for mesh in MESHES {
+		delete(mesh.instance_data)
+	}
+	delete(MESHES)
+	log.destroy_console_logger(context.logger)
 }
 

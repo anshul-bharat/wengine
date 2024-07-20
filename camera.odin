@@ -43,10 +43,7 @@ camera_controller_process_events :: proc(
 	event: KeyEvent,
 ) -> bool {
 
-	context.logger = log.create_console_logger()
-
 	pressed := event.key_action == KeyAction.PRESS || event.key_action == KeyAction.REPEAT
-
 
 	#partial switch event.key_code {
 	case KeyCode.ARROW_UP:
@@ -66,7 +63,6 @@ camera_controller_process_events :: proc(
 }
 
 camera_controller_update_camera :: proc(camera_controller: ^CameraController, camera: ^Camera) {
-	context.logger = log.create_console_logger()
 
 	forward := camera^.target - camera^.eye
 	forward_norm := linalg.normalize(forward)
@@ -74,11 +70,9 @@ camera_controller_update_camera :: proc(camera_controller: ^CameraController, ca
 
 	if camera_controller^.is_forward_pressed && forward_mag > camera_controller^.speed {
 		camera^.eye += forward_norm * camera_controller^.speed
-		// log.info(camera^.eye, camera_controller^)
 	}
 	if camera_controller^.is_backward_pressed {
 		camera^.eye -= forward_norm * camera_controller^.speed
-		// log.info(camera^.eye, camera_controller^)
 	}
 
 	right := linalg.cross(forward_norm, camera^.up)

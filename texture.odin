@@ -1,22 +1,40 @@
 package wengine
 
 import "core:bytes"
+import "core:image"
 import "core:image/png"
 
 import "vendor:wgpu"
 
-Texture :: struct {
-	bind_group_layout: wgpu.BindGroupLayout,
-	bind_group:        wgpu.BindGroup,
+BaseTexture :: struct {
+	texture: wgpu.Texture,
+	view:    wgpu.TextureView,
+	sampler: wgpu.Sampler,
 }
 
-texture_create :: proc(state: ^State) -> Texture {
+DiffuseTexture :: struct {
+	using base_texture: BaseTexture,
+	bind_group_layout:  wgpu.BindGroupLayout,
+	bind_group:         wgpu.BindGroup,
+}
+
+DepthTexture :: struct {
+	using base_texture: BaseTexture,
+}
+
+DEPTH_FORMAT :: wgpu.TextureFormat.Depth32Float
+
+texture_create :: proc(state: ^State) -> DiffuseTexture {
 
 	device := state.device
 	diffuse_bytes := #load("assets/happy-tree.png")
 	diffuse_image, err := png.load_from_bytes(diffuse_bytes)
 	diffuse_rgba := bytes.buffer_to_bytes(&diffuse_image.pixels)
-
+	defer {
+		free(diffuse_image.metadata.(^image.PNG_Info))
+		free(diffuse_image)
+		delete(diffuse_rgba)
+	}
 	texture_size := wgpu.Extent3D {
 		width              = cast(u32)diffuse_image.width,
 		height             = cast(u32)diffuse_image.height,
@@ -126,6 +144,58 @@ texture_create :: proc(state: ^State) -> Texture {
 		},
 	)
 
-	return Texture{bind_group_layout = texture_bind_group_layout, bind_group = diffuse_bind_group}
+	return DiffuseTexture {
+		texture = diffuse_texture,
+		view = diffuse_texture_view,
+		sampler = diffuse_sampler,
+		bind_group_layout = texture_bind_group_layout,
+		bind_group = diffuse_bind_group,
+	}
+}
+
+
+texture_create_depth :: proc(
+	device: ^wgpu.Device,
+	config: ^wgpu.SurfaceConfiguration,
+	label: cstring,
+) -> DepthTexture {
+	size := wgpu.Extent3D {
+		width              = config.width,
+		height             = config.height,
+		depthOrArrayLayers = 1,
+	}
+
+	desc := wgpu.TextureDescriptor {
+		label         = "",
+		size          = size,
+		mipLevelCount = 1,
+		sampleCount   = 1,
+		dimension     = wgpu.TextureDimension._2D,
+		format        = DEPTH_FORMAT,
+		usage         = {.RenderAttachment, .TextureBinding},
+		// viewFormatCount = 0,
+		// viewFormats = nil
+	}
+
+	texture := wgpu.DeviceCreateTexture(device^, &desc)
+
+	view := wgpu.TextureCreateView(texture)
+	sampler := wgpu.DeviceCreateSampler(
+		device^,
+		&wgpu.SamplerDescriptor {
+			addressModeU = wgpu.AddressMode.ClampToEdge,
+			addressModeV = wgpu.AddressMode.ClampToEdge,
+			addressModeW = wgpu.AddressMode.ClampToEdge,
+			magFilter = wgpu.FilterMode.Linear,
+			minFilter = wgpu.FilterMode.Linear,
+			mipmapFilter = wgpu.MipmapFilterMode.Nearest,
+			compare = wgpu.CompareFunction.LessEqual,
+			lodMinClamp = 0.0,
+			lodMaxClamp = 100.0,
+			maxAnisotropy = 1,
+		},
+	)
+
+	return DepthTexture{texture = texture, view = view, sampler = sampler}
 }
 
