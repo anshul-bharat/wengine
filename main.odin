@@ -22,20 +22,12 @@ State :: struct {
 	pipeline_layout: wgpu.PipelineLayout,
 	pipeline:        wgpu.RenderPipeline,
 	camera:          Camera,
-	instances:       [dynamic]Instance,
-	instance_buffer: wgpu.Buffer,
+	// instances:       [dynamic]Instance,
+	// instance_buffer: wgpu.Buffer,
 	depth_texture:   DepthTexture,
+	models:          [dynamic]Model,
 }
 
-Mesh :: struct {
-	vertices:        []Vertex,
-	indices:         []u16,
-	vertex_buffer:   wgpu.Buffer,
-	index_buffer:    wgpu.Buffer,
-	instance_buffer: wgpu.Buffer,
-	instance_count:  i32,
-	instance_data:   []InstanceRaw,
-}
 
 ShaderBindGroup :: struct {
 	// code:              string,
@@ -49,24 +41,9 @@ ShaderBindGroup :: struct {
 	data:              rawptr,
 }
 
-Vertex :: struct {
-	position:   [3]f32,
-	color:      [3]f32,
-	tex_coords: [2]f32,
-}
-
 ColorAngle :: struct {
 	color: f32,
 	angle: f32,
-}
-
-Instance :: struct {
-	position: [3]f32,
-	rotation: linalg.Quaternionf32,
-}
-
-InstanceRaw :: struct {
-	model: matrix[4, 4]f32,
 }
 
 uniforms := ColorAngle {
@@ -81,39 +58,49 @@ camera_controller := CameraController {
 @(private = "file")
 state: State
 
-MESHES: [dynamic]Mesh
+get_state :: proc() -> ^State {
+	return &state
+}
+
+// MESHES: [dynamic]Mesh
+// MODELS: [dynamic]Model
 TEXTURES: [dynamic]DiffuseTexture
 SHADER_BIND_GROUPS: [dynamic]ShaderBindGroup
 
-VERTICES :: []Vertex {
+VERTICES := [dynamic]Vertex {
 	Vertex {
 		position = {-0.0868241, 0.49240386, 0.0},
-		color = {0.0, 0.0, 0.5},
 		tex_coords = {0.4131759, 0.00759614},
+		normal = {0.0, 0.0, 0.0},
+		color = {0.0, 0.0, 0.5},
 	}, // A
 	Vertex {
 		position = {-0.49513406, 0.06958647, 0.0},
-		color = {0.5, 0.0, 0.5},
 		tex_coords = {0.0048659444, 0.43041354},
+		normal = {0.0, 0.0, 0.0},
+		color = {0.5, 0.0, 0.5},
 	}, // B
 	Vertex {
 		position = {-0.21918549, -0.44939706, 0.0},
-		color = {0.5, 0.0, 0.5},
 		tex_coords = {0.28081453, 0.949397},
+		normal = {0.0, 0.0, 0.0},
+		color = {0.5, 0.0, 0.5},
 	}, // C
 	Vertex {
 		position = {.35966998, -0.3473291, 0.0},
-		color = {0.5, 0.0, 0.5},
 		tex_coords = {0.85967, 0.84732914},
+		normal = {0.0, 0.0, 0.0},
+		color = {0.5, 0.0, 0.5},
 	}, // D
 	Vertex {
 		position = {.44147372, 0.2347359, 0.0},
-		color = {0.5, 0.0, 0.5},
 		tex_coords = {0.9414737, 0.2652641},
+		normal = {0.0, 0.0, 0.0},
+		color = {0.5, 0.0, 0.5},
 	}, // E
 }
 
-INDICES := []u16{0, 1, 4, 1, 2, 4, 2, 3, 4, 0}
+INDICES := [dynamic]u16{0, 1, 4, 1, 2, 4, 2, 3, 4, 0}
 
 OPENGL_TO_WGPU_MATRIX :: matrix[4, 4]f32{
 	1.0, 0.0, 0.0, 0.0, 
@@ -123,6 +110,7 @@ OPENGL_TO_WGPU_MATRIX :: matrix[4, 4]f32{
 }
 
 NUM_INSTANCES_PER_ROW := 10
+SPACE_BETWEEN: f32 = 3.0
 INSTANCE_DISPLACEMENT := [3]f32 {
 	cast(f32)NUM_INSTANCES_PER_ROW * 0.5,
 	0.0,
@@ -142,50 +130,18 @@ shader_bind_group_update :: proc(shader_bind_group: ^ShaderBindGroup) {
 	shader_bind_group.data = raw_data([]CameraUniform{data})
 }
 
-vertices_get_translated :: proc(vertices: []Vertex, point: [3]f32) -> []Vertex {
-	translated := vertices
+vertices_get_translated :: proc(vertices: [dynamic]Vertex, point: [3]f32) -> [dynamic]Vertex {
+	translated := [dynamic]Vertex{}
 
-	for _, i in translated {
-		translated[i].position += point // [?]f32{0.0, 0.0, 0.0}
+	for _, i in vertices {
+		v := vertices[i]
+		v.position += point
+		append(&translated, v) // [?]f32{0.0, 0.0, 0.0}
 	}
 
 	return translated
 }
 
-mesh_create :: proc(
-	device: wgpu.Device,
-	vertices: []Vertex,
-	indices: []u16,
-	instance_data: []$T = nil,
-) -> Mesh {
-	mesh: Mesh
-	mesh.vertices = vertices
-	mesh.indices = indices
-
-	mesh.vertex_buffer = wgpu.DeviceCreateBufferWithDataSlice(
-		device,
-		&wgpu.BufferWithDataDescriptor{label = "Vertex buffer data", usage = {.Vertex, .CopyDst}},
-		vertices,
-	)
-
-	mesh.index_buffer = wgpu.DeviceCreateBufferWithDataSlice(
-		device,
-		&wgpu.BufferWithDataDescriptor{label = "Index buffer data", usage = {.Index}},
-		indices,
-	)
-
-	if instance_data != nil {
-		mesh.instance_buffer = wgpu.DeviceCreateBufferWithDataSlice(
-			device,
-			&wgpu.BufferWithDataDescriptor{label = "Instance buffer", usage = {.Vertex}},
-			instance_data,
-		)
-		mesh.instance_count = cast(i32)len(instance_data)
-		mesh.instance_data = instance_data
-	}
-
-	return mesh
-}
 
 shader_bind_group_create :: proc(device: wgpu.Device, data: []$T) -> ShaderBindGroup {
 	shader: ShaderBindGroup
@@ -269,19 +225,18 @@ shader_bind_group_create :: proc(device: wgpu.Device, data: []$T) -> ShaderBindG
 	shader.type_size = size_of(T)
 	shader.data_type = T
 
-	// shader.data = data
 	return shader
 }
-
-// shader_bind_group_free :: proc(sbgl: ShaderBindGroup) {
-
-// }
 
 _main :: proc() {
 
 	context.logger = log.create_console_logger()
-	state.ctx = context
+	// data_ptr := raw_data(&[3]u8{1, 2, 3})
+	// data_slice := cast([^]u8)data_ptr
+	// log.info(data_slice[1])
 
+	state.ctx = context
+	// model_load_obj(&state)
 	os_init(&state.os)
 
 	state.instance = wgpu.CreateInstance(nil)
@@ -338,6 +293,8 @@ _main :: proc() {
 
 		state.queue = wgpu.DeviceGetQueue(state.device)
 
+		state.depth_texture = texture_create_depth(&state.device, &state.config, "depth_texture")
+
 		shader :: #load("shader.wgsl", cstring)
 
 		state.module = wgpu.DeviceCreateShaderModule(
@@ -349,7 +306,6 @@ _main :: proc() {
 				},
 			},
 		)
-
 
 		//camera
 		state.camera = Camera {
@@ -363,19 +319,21 @@ _main :: proc() {
 		}
 		//camera end
 
-		instance_data := [dynamic]InstanceRaw{}
+		instance_data := make([dynamic]InstanceRaw)
+		instances := [dynamic]Instance{}
 		for z in 0 ..< NUM_INSTANCES_PER_ROW {
 			for x in 0 ..< NUM_INSTANCES_PER_ROW {
-				position := [3]f32 {
-					cast(f32)x - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
-					0.0,
-					cast(f32)z - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
-				} // - INSTANCE_DISPLACEMENT
+				// position := [3]f32 {
+				// 	cast(f32)x - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
+				// 	0.0,
+				// 	cast(f32)z - (cast(f32)NUM_INSTANCES_PER_ROW * 0.5),
+				// } // - INSTANCE_DISPLACEMENT
+
+				_x := SPACE_BETWEEN * (f32(x) - INSTANCE_DISPLACEMENT.x)
+				_z := SPACE_BETWEEN * (f32(z) - INSTANCE_DISPLACEMENT.z)
+
+				position := [3]f32{_x, 0.0, _z}
 				rotation: linalg.Quaternionf32
-				// if true {
-				// 	log.info("Exitting", cast(f32)x, cast(f32)z)
-				// 	os.exit(0)
-				// }
 				if cast(i32)linalg.length(position) == 0 {
 					rotation = linalg.quaternion_angle_axis_f32(0.0, [3]f32{0.0, 0.0, 1.0})
 				} else {
@@ -389,12 +347,10 @@ _main :: proc() {
 					rotation = rotation,
 				}
 				append(&instance_data, instance_to_raw(&instance))
-				append(&state.instances, instance)
+				append(&instances, instance)
 			}
 		}
-
-		// delete(instance_data)
-
+		delete(instances)
 		shader_bind_group_1 := shader_bind_group_create(device, []ColorAngle{uniforms})
 		shader_bind_group_2 := shader_bind_group_create(
 			device,
@@ -403,27 +359,36 @@ _main :: proc() {
 		append(&SHADER_BIND_GROUPS, shader_bind_group_1)
 		append(&SHADER_BIND_GROUPS, shader_bind_group_2)
 
-
-		texture_1 := texture_create(&state)
+		texture_1 := texture_create()
 		append(&TEXTURES, texture_1)
 
-		meshes_1 := mesh_create(
-			device,
-			vertices_get_translated(VERTICES, [?]f32{0.5, 0.0, 0.0}),
-			INDICES,
-			instance_data[:],
-		)
+		// model_load_obj("", nil, instance_data)
+		instace_data_info := new(InstanceDataInfo)
+		instace_data_info.instance_data_ptr = &instance_data
+		model_load_obj_async("assets/cube.obj", nil, instace_data_info)
+		// model_load_obj("", nil, &InstanceDataInfo{&instance_data})
+		// model.meshes[0].instance_data = instance_data
+		// model.meshes[0].instances = instances
+
+		// mesh_1_vertices := vertices_get_translated(&VERTICES, [?]f32{0.5, 0.0, 0.0})
+		// meshes_1 := mesh_create(device, &mesh_1_vertices, &INDICES, &instance_data)
+		// log.info(model)
+		// mesh_1_vertices := vertices_get_translated(model.meshes[0].vertices, [?]f32{0.5, 0.0, 0.0})
+		// meshes_1 := mesh_create(device, mesh_1_vertices, model.meshes[0].indices, instance_data)
+		// mesh_1 := model.meshes[0]
+
+		// append(&state.models, model)
+		// append(&MESHES, mesh_1)
+
 		// meshes_2 := mesh_create(
 		// 	device,
 		// 	vertices_get_translated(VERTICES, [?]f32{-0.5, 0.0, 0.0}),
 		// 	INDICES,
 		// 	instance_data[:],
 		// )
-		append(&MESHES, meshes_1)
 		// append(&MESHES, meshes_2)
 
 		bind_group_layouts := [dynamic]wgpu.BindGroupLayout{}
-		// defer delete(bind_group_layouts)
 		for l in SHADER_BIND_GROUPS {
 			append(&bind_group_layouts, l.bind_group_layout)
 		}
@@ -439,114 +404,9 @@ _main :: proc() {
 				bindGroupLayouts = raw_data(bind_group_layouts),
 			},
 		)
-
 		delete(bind_group_layouts)
-		// clear(&bind_group_layouts)
 
-		attrs := []wgpu.VertexAttribute {
-			wgpu.VertexAttribute {
-				offset = 0,
-				shaderLocation = 0,
-				format = wgpu.VertexFormat.Float32x3,
-			},
-			wgpu.VertexAttribute {
-				offset = 3 * size_of(f32),
-				shaderLocation = 1,
-				format = wgpu.VertexFormat.Float32x3,
-			},
-			wgpu.VertexAttribute {
-				offset = 6 * size_of(f32),
-				shaderLocation = 2,
-				format = wgpu.VertexFormat.Float32x2,
-			},
-		}
-
-		iattrs := []wgpu.VertexAttribute {
-			wgpu.VertexAttribute {
-				offset = 0,
-				shaderLocation = 5,
-				format = wgpu.VertexFormat.Float32x4,
-			},
-			wgpu.VertexAttribute {
-				offset = 4 * size_of(f32),
-				shaderLocation = 6,
-				format = wgpu.VertexFormat.Float32x4,
-			},
-			wgpu.VertexAttribute {
-				offset = 8 * size_of(f32),
-				shaderLocation = 7,
-				format = wgpu.VertexFormat.Float32x4,
-			},
-			wgpu.VertexAttribute {
-				offset = 12 * size_of(f32),
-				shaderLocation = 8,
-				format = wgpu.VertexFormat.Float32x4,
-			},
-		}
-
-		state.depth_texture = texture_create_depth(&state.device, &state.config, "depth_texture")
-
-		state.pipeline = wgpu.DeviceCreateRenderPipeline(
-			state.device,
-			&wgpu.RenderPipelineDescriptor {
-				layout = state.pipeline_layout,
-				vertex = wgpu.VertexState {
-					module = state.module,
-					entryPoint = "vs_main",
-					buffers = raw_data(
-						[]wgpu.VertexBufferLayout {
-							{
-								arrayStride = size_of(Vertex),
-								stepMode = wgpu.VertexStepMode.Vertex,
-								attributes = raw_data(attrs),
-								attributeCount = len(attrs),
-							},
-							{
-								arrayStride = size_of(InstanceRaw),
-								stepMode = wgpu.VertexStepMode.Instance,
-								attributes = raw_data(iattrs),
-								attributeCount = len(iattrs),
-							},
-						},
-					),
-					bufferCount = 2,
-				},
-				fragment = &{
-					module = state.module,
-					entryPoint = "fs_main",
-					targetCount = 1,
-					targets = &wgpu.ColorTargetState {
-						format = .BGRA8Unorm,
-						writeMask = wgpu.ColorWriteMaskFlags_All,
-					},
-				},
-				primitive = {topology = .TriangleList},
-				multisample = {count = 1, mask = 0xFFFFFFFF},
-				depthStencil = &wgpu.DepthStencilState {
-					format = DEPTH_FORMAT,
-					depthWriteEnabled = true,
-					depthCompare = wgpu.CompareFunction.Less,
-					stencilFront = wgpu.StencilFaceState {
-						compare = wgpu.CompareFunction.Always,
-						failOp = wgpu.StencilOperation.Keep,
-						depthFailOp = wgpu.StencilOperation.Keep,
-						passOp = wgpu.StencilOperation.Keep,
-					},
-					stencilBack = wgpu.StencilFaceState {
-						compare = wgpu.CompareFunction.Always,
-						failOp = wgpu.StencilOperation.Keep,
-						depthFailOp = wgpu.StencilOperation.Keep,
-						passOp = wgpu.StencilOperation.Keep,
-					},
-					stencilReadMask = 0,
-					stencilWriteMask = 0,
-					depthBias = 0,
-					depthBiasSlopeScale = 0,
-					depthBiasClamp = 0,
-				},
-			},
-		)
-
+		pipeline_create(&state)
 		os_run(&state.os)
 	}
 }
@@ -564,20 +424,12 @@ process_key_event :: proc "c" (key_event: KeyEvent) {
 	context = state.ctx
 
 	#partial switch key_event.key_code {
-	// case KeyCode.ARROW_LEFT:
-	// 	state.camera.eye.x += 1
-	// case KeyCode.ARROW_RIGHT:
-	// 	state.camera.eye.x -= 1
 	case KeyCode.ESCAPE:
 		exit(0)
 	}
 
 	camera_controller_process_events(&camera_controller, key_event)
 	camera_controller_update_camera(&camera_controller, &state.camera)
-	// camera_uniform^ = camera_build_view_projection_matrix(&state.camera)
-	// log.info(state.camera.eye)
-	// log.info(key_event)
-	// log.info(camera_controller)
 }
 
 frame :: proc "c" (dt: f32) {
@@ -614,7 +466,7 @@ frame :: proc "c" (dt: f32) {
 				view = frame,
 				loadOp = .Clear,
 				storeOp = .Store,
-				clearValue = {r = 0, g = 0, b = 0, a = 1},
+				clearValue = {0.5, 0.8, 1, 1},
 			},
 			depthStencilAttachment = &wgpu.RenderPassDepthStencilAttachment {
 				view = state.depth_texture.view,
@@ -652,14 +504,11 @@ frame :: proc "c" (dt: f32) {
 				shader_bind_group.type_size,
 			)
 		} else if i == 1 {
-
-			// camera_u := camera_build_view_projection_matrix(&state.camera)
 			wgpu.QueueWriteBuffer(
 				state.queue,
 				shader_bind_group.buffer,
 				0,
 				shader_bind_group.data,
-				// raw_data([]CameraUniform{camera_u}),
 				shader_bind_group.type_size,
 			)
 		}
@@ -670,46 +519,13 @@ frame :: proc "c" (dt: f32) {
 		)
 	}
 
-	uniforms.color += 0.1
+	// uniforms.color += 0.1
 	uniforms.angle += 0.01
 
-
-	for mesh in MESHES {
-		wgpu.RenderPassEncoderSetVertexBuffer(
-			render_pass_encoder,
-			0,
-			mesh.vertex_buffer,
-			0,
-			wgpu.BufferGetSize(mesh.vertex_buffer),
-		)
-
-		wgpu.RenderPassEncoderSetVertexBuffer(
-			render_pass_encoder,
-			1,
-			mesh.instance_buffer,
-			0,
-			wgpu.BufferGetSize(mesh.instance_buffer),
-		)
-
-		wgpu.RenderPassEncoderSetIndexBuffer(
-			render_pass_encoder,
-			mesh.index_buffer,
-			wgpu.IndexFormat.Uint16,
-			0,
-			wgpu.BufferGetSize(mesh.index_buffer),
-		)
-
-
-		wgpu.RenderPassEncoderDrawIndexed(
-			render_pass_encoder,
-			cast(u32)len(mesh.indices),
-			// cast(u32)len(state.instances),
-			cast(u32)mesh.instance_count,
-			0,
-			0,
-			0,
-		)
+	for &model in state.models {
+		model_render(&model, render_pass_encoder)
 	}
+
 	wgpu.RenderPassEncoderEnd(render_pass_encoder)
 
 	command_buffer := wgpu.CommandEncoderFinish(command_encoder, nil)
@@ -731,15 +547,17 @@ finish :: proc() {
 	wgpu.SurfaceRelease(state.surface)
 	wgpu.InstanceRelease(state.instance)
 
-	delete(state.instances)
+	// delete(state.instances)
 
 	delete(SHADER_BIND_GROUPS)
 	delete(TEXTURES)
-
-	for mesh in MESHES {
-		delete(mesh.instance_data)
+	for model in state.models {
+		model_delete(model)
+		// for mesh in model.meshes {
+		// 	mesh_delete(mesh)
+		// }
 	}
-	delete(MESHES)
+	delete(state.models)
 	log.destroy_console_logger(context.logger)
 }
 

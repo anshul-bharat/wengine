@@ -1,9 +1,46 @@
 package wengine
 
-import "core:log"
-
+import "base:runtime"
+import "core:bytes"
+import "core:fmt"
+import "core:mem"
+import "core:net"
+import os_lib "core:os"
+import "core:slice"
+import "core:strings"
+import "core:time"
 import "vendor:wasm/js"
 import "vendor:wgpu"
+
+foreign import "env"
+
+load_bytes :: proc(
+	path: string,
+	callback: proc "odin" (_: []u8, _: rawptr),
+	userdata: rawptr = nil,
+) {
+
+	@(default_calling_convention = "contextless")
+	foreign env {
+		@(link_name = "load_bytes")
+		_load_bytes :: proc(path: string, callback: proc "odin" (_: []u8, _: rawptr), userdata: rawptr) ---
+	}
+
+	_load_bytes(path, callback, userdata)
+}
+
+@(export, link_name = "odin_do_load_callback")
+do_load_callback :: proc(
+	data_ptr: rawptr,
+	data_len: u32,
+	callback: proc(_: []u8, _: rawptr),
+	userdata: rawptr = nil,
+) {
+	if callback != nil {
+		rawdata := slice.bytes_from_ptr(data_ptr, int(data_len))
+		callback(rawdata, userdata)
+	}
+}
 
 OS :: struct {
 	initialized: bool,
@@ -12,11 +49,33 @@ OS :: struct {
 @(private = "file")
 g_os: ^OS
 
+Temp :: struct {
+	size: int,
+}
+
+g_temp := Temp {
+	size = 0,
+}
+
 os_init :: proc(os: ^OS) {
 	g_os = os
 	assert(js.add_window_event_listener(.Resize, nil, size_callback))
 	assert(js.add_window_event_listener(.Key_Down, nil, key_down_callback))
 	assert(js.add_window_event_listener(.Key_Up, nil, key_up_callback))
+
+	g_temp.size = 100
+
+	// load_bytes("assets/happy-tree.jpg", proc(data: []u8, userdata: rawptr) {
+	// 		t := cast(^Temp)userdata
+	// 		fmt.println(t.size)
+	// 		t^.size = 200
+	// 	}, rawptr(&g_temp))
+
+	// load_bytes("assets/cube.obj", proc(data: []u8, userdata: rawptr) {
+	// 		text := strings.clone_from_bytes(data)
+	// 		fmt.println(text)
+	// 	}, nil)
+
 }
 
 // NOTE: frame loop is done by the runtime.js repeatedly calling `step`.
@@ -46,7 +105,6 @@ step :: proc(dt: f32) -> bool {
 	if !g_os.initialized {
 		return true
 	}
-
 	frame(dt)
 	return true
 }

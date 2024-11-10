@@ -24,10 +24,10 @@ DepthTexture :: struct {
 
 DEPTH_FORMAT :: wgpu.TextureFormat.Depth32Float
 
-texture_create :: proc(state: ^State) -> DiffuseTexture {
-
+texture_create :: proc() -> DiffuseTexture {
+	state := get_state()
 	device := state.device
-	diffuse_bytes := #load("assets/happy-tree.png")
+	diffuse_bytes := #load("assets/cube-diffuse.png")
 	diffuse_image, err := png.load_from_bytes(diffuse_bytes)
 	diffuse_rgba := bytes.buffer_to_bytes(&diffuse_image.pixels)
 	defer {

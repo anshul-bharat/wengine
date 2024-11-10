@@ -115,7 +115,9 @@ class WasmMemoryInterface {
 			return null;
 		}
 		let len = 0;
-		for (; this.mem.getUint8(start+len) != 0; len += 1) {}
+		for (; this.mem.getUint8(start+len) != 0; len += 1) {
+			// console.log(this.mem.getUint8(start+len))
+		}
 		return this.loadString(start, len);
 	}
 
@@ -1381,7 +1383,29 @@ function odinSetupDefaultImports(wasmMemoryInterface, consoleElement, memory) {
 
 	let webglContext = new WebGLInterface(wasmMemoryInterface);
 	
-	const env = {};
+	const env = {
+		load_bytes: (path_ptr, path_len, callback, userdata) => {
+			let path = wasmMemoryInterface.loadString(path_ptr, path_len);
+			let listener = (arrayBuffer) => {
+				const odin_ctx = wasmMemoryInterface.exports.default_context_ptr();
+				
+				let bytes = new Uint8Array(arrayBuffer)
+				var data_ptr = wasmMemoryInterface.exports.wgpu_alloc(arrayBuffer.byteLength)
+
+				let dataArr = new Uint8Array(wasmMemoryInterface.memory.buffer, data_ptr, arrayBuffer.byteLength)
+				dataArr.set(bytes)
+				
+				wasmMemoryInterface.exports.odin_do_load_callback(data_ptr, bytes.byteLength, callback, userdata, odin_ctx);
+				
+				wasmMemoryInterface.exports.wgpu_alloc(data_ptr)
+			};
+
+			fetch(path)
+				.then(res => res.arrayBuffer())
+				.then(bytes => listener(bytes))
+				.catch(err => {console.log(err)})
+		}
+	};
 
 	if (memory) {
 		env.memory = memory;

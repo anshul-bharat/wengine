@@ -1,8 +1,9 @@
 //+build !js
 package wengine
 
+import "core:log"
+import o_os "core:os"
 import "core:time"
-
 import "vendor:glfw"
 import "vendor:wgpu"
 import "vendor:wgpu/glfwglue"
@@ -95,5 +96,15 @@ get_key_code :: proc "c" (key: i32) -> KeyCode {
 	}
 
 	return KeyCode.UNKNOWN
+}
+
+load_bytes :: proc(
+	filepath: string,
+	callback: proc(_: []u8, _: rawptr = nil),
+	userdata: rawptr = nil,
+) {
+	data, success := o_os.read_entire_file(filepath)
+	// log.info("in load_bytes", data, success)
+	callback(data, userdata)
 }
 
